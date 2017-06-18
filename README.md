@@ -39,10 +39,15 @@ func main() {
 
   fmt.Println("Launching server...")
   //jhula.New(maxConCount int,InQSize int , OutQSize int, inThCnt int, outThCnt int) *jhulaHead {
+
   // jhula will accept maximum of 200 parallel connection on tcp port
+
   // packet queue size for tcp socket - 500
+
   // packet queue size for outgoing packets on tcp socket - 500
+
   // numnber of go threads to process incoming tcp packets - 20
+
   jh := jhula.New(200,500,500,20,2)
 
   //Register callback with jhula

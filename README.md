@@ -2,9 +2,9 @@ Package Name : jhula
 
 Requirement:
  
-	a) Multiple clients can connect simultanously to same tcp socket.
+	a) Multiple clients can connect simultanously to same tcp port.
  
-	b) TCP client-server connection operates independent of other connections.
+	b) Single TCP client-server connection operates independent of other connections on same port.
 
 	c) Application has multiple threads of execution for proessing incoming packets and sending packets for single tcp socket. E.g. Well Known application is openflow implementation, where multiple packetIn messages can be serviced independent of each other.
 

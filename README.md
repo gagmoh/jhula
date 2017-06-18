@@ -1,9 +1,13 @@
 Package Name : jhula
 
-Requirement: 
-	a) Multiple clients can connect simultanously to same tcp socket. 
+Requirement:
+ 
+	a) Multiple clients can connect simultanously to same tcp socket.
+ 
 	b) TCP client-server connection operates independent of other connections.
+
 	c) Application has multiple threads of execution for proessing incoming packets and sending packets for single tcp socket. E.g. Well Known application is openflow implementation, where multiple packetIn messages can be serviced independent of each other.
+
 	d) Application configurable on per TCP port basis:
 		1) Maximum number of client connections allowed
 		2) Number of go threads to spawn for processing incoming packets.
@@ -11,6 +15,7 @@ Requirement:
 		4) Size of outgoing packet queue
 
 Description: Package provides underlying infrastrcuture to application for above mentioned requirements.
+
 	Step 1: Application calls for new instance of jhula package for tcp port
 		jh = jhula.New(maxConCount int,InQSize int , OutQSize int, inThCnt int, outThCnt int) *jhulaHead
 

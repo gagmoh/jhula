@@ -6,7 +6,9 @@ Requirement:
  
 	b) TCP client-server connection operates independent of other connections.
 
-	c) Application has multiple threads of execution for proessing incoming packets and sending packets for single tcp socket. E.g. Well Known application is openflow implementation, where multiple packetIn messages can be serviced independent of each other.
+	c) Application has multiple threads of execution for proessing incoming packets and sending packets 
+for single tcp socket. 
+E.g. Well Known application is openflow implementation, where multiple packetIn messages can be serviced independent of each other.
 
 	d) Application configurable on per TCP port basis:
 		1) Maximum number of client connections allowed

@@ -302,3 +302,7 @@ func (jC *jhulaConf) registerInc(fnList ...func(*InQ)) {
 func (conn *ConnDet) AddToTxQ(outPkt *bytes.Buffer) {
 	conn.ConPktQ.addToTxQ(outPkt)
 }
+
+func (conDet *ConnDet) SockClose() {
+	conDet.ConnPtr.Close()
+}

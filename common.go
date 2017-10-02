@@ -41,6 +41,7 @@ type jhulaHead struct {
 	interrupt chan os.Signal //handle interrupt from OS
 
 	Sock	*net.TCPListener
+	ClosePort chan bool
 }
 
 // scope : internal

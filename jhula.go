@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"io"
 )
 
 //type fn func(*InQ)
@@ -36,6 +37,7 @@ func New(maxConCount int,InQSize int , OutQSize int, inThCnt int, outThCnt int) 
 		wg:  new(sync.WaitGroup),	// counting semaphore to track number of go threads
 		ConDet: make([]*ConnDet,0,maxConCount), //slice to store pointer to ConnDet
 		interrupt: make(chan os.Signal, 1), // channel to handle os interrupt signal
+		ClosePort: make(chan bool,1),
 	}
 }
 
@@ -60,13 +62,7 @@ func (jh *jhulaHead) RegisterInc(fnList ...func(*InQ)) {
 //***************************************************************
 func (jh *jhulaHead) EstCon(port string, ExtSync *sync.WaitGroup) error {
 
-	if ExtSync != nil {
-		ExtSync.Add(1)
-	}
 	logInit("log"+port+".txt")
-	// register to receive OS interrupts
-	signal.Notify(jh.interrupt,os.Interrupt,os.Kill)
-	go jh.handleInterrupt()
 
 	addr,err := net.ResolveTCPAddr("tcp4",port)
 
@@ -76,7 +72,18 @@ func (jh *jhulaHead) EstCon(port string, ExtSync *sync.WaitGroup) error {
 	}
 
 	tcpSock ,err := net.ListenTCP("tcp4",addr)
+	if err != nil {
+		Warning.Println("Function EstCon : Failure to start listening on port : %d err : %s \n",port,(err.Error()) )
+		return err
+	}
 	jh.Sock = tcpSock
+
+	//if ExtSync != nil {
+//		ExtSync.Add(1)
+//	}
+	// register to receive OS interrupts
+	signal.Notify(jh.interrupt,os.Interrupt,os.Kill)
+	go jh.handleInterrupt(ExtSync)
 
 	Verbose.Println("Starting to Listen on port: ",port)
 
@@ -87,57 +94,79 @@ func (jh *jhulaHead) EstCon(port string, ExtSync *sync.WaitGroup) error {
 
 	defer func() {
 		tcpSock.Close()
-		ExtSync.Done()
+		if ExtSync != nil {
+			ExtSync.Done()
+		}
 	}()
 
 	for {
-		newConn,err := tcpSock.AcceptTCP()
-		if err != nil {
-			if err.Error() != "EOF" {
+		select{
+		case <-jh.ClosePort:
+			Warning.Printf("Function EstCon : ClosePort Detect \n") 
+			jh.wg.Wait()
+			Warning.Printf("Done waiting for threads in EstCon \n")
+			return nil
+		default: 
+			newConn,err := tcpSock.AcceptTCP()
+			Warning.Printf("Function EstConn: New Connection request received Conn : %x err %x \n",newConn,err)
 
-				Warning.Printf("failurr %s to establish conn with incoming sock requesst. TCP Port %s \n ",(err.Error()),port )
-			break
+		  	if err != nil {
+		    		if err == io.EOF {
+		      			Warning.Printf("EOF failurr %s to establish conn with incoming sock requesst. TCP Port %s \n ",(err.Error()),port )
+	      	    		}
+				Warning.Println("No more accepting connections on port : %d Err : %s \n",port, err.Error() )
+		      		continue
+		  	} else {
+				Warning.Println("Success in establishing connection. TCP Port ",port )
+		  	}
+
+			if (jh.ConCount+1) >= jh.JhConf.maxCon {
+				Warning.Println("Max limit for connection to server port reached. Dropping new connection",port)
+				newConn.Close()
+				continue
 			}
-		} else {
-			Warning.Println("Success in establishing connection. TCP Port ",port )
-		}
 
-		if (jh.ConCount+1) >= jh.JhConf.maxCon {
-			Warning.Println("Max limit for connection to server port reached. Dropping new connection",port)
-			newConn.Close()
-			continue
-		}
+			// Each new connection request will be handled in different go routine 
+			jh.ConCount = jh.ConCount + 1
+			jh.wg.Add(1)
+			Warning.Println("Function EstConn invoking function handleIncoming to handover new connection \n")
+			go jh.handleIncoming(newConn,port)
+	        }
 
-		// Each new connection request will be handled in different go routine 
-		jh.ConCount = jh.ConCount + 1
-		jh.wg.Add(1)
-		go jh.handleIncoming(newConn,port)
 	}
 
 	for _,con := range jh.ConDet {
 		Warning.Println("Abort len : ",len(con.Abort) )
-		if len(con.Abort) > 0 {  	// hack.Abort Already triggered. No action required
+		//if len(con.Abort) > 0 {  	// hack.Abort Already triggered. No action required
 			con.Abort <- true
-		}
+		//}
 	}
-	Verbose.Println("waiting for clean up . TCP Port ",port)
-	jh.wg.Wait()
-	Verbose.Println("Done waiting. Cleanup done for TCP port ",port)
+	Warning.Println("waiting for clean up . TCP Port ",port)
+	Warning.Println("Done waiting. Cleanup done for TCP port ",port)
 	close(jh.interrupt) // Takes care of return from interrupt handler routine. 
 	return err
 }
 
 // handleInterrupt catches the interrupt signal and ensure thread clean-up.
-func (jh *jhulaHead) handleInterrupt() {
-	//defer jh.wg.Done()
+func (jh *jhulaHead) handleInterrupt(ExtSync *sync.WaitGroup) {
+        //if ExtSync !=  nil {
+	//  defer ExtSync.Done()
+        //}
+        Warning.Println("interrupt received \n")
 	select {
 	case _,ok := <-jh.interrupt:
 		if !ok {
+		 Warning.Printf("no action in interrupr")	
 			return
 		}
 	        for  _,con := range jh.ConDet {
-			con.Abort <- true
+			//con.ConnPtr.Close()
+			//close(con.ConPktQ.Buf)
+			//close(con.ConPktQ.OutBuf)
+			con.cleanUp()
 		}
+                Warning.Println("Start closing socket \n")
+		jh.ClosePort <- true
 		jh.Sock.Close()
 		return
 	}
@@ -172,7 +201,7 @@ func (jh *jhulaHead) newJH(conn *net.TCPConn, portStr string) (conDet *ConnDet) 
 
 //handleIncoming function thread to isolate processing of new incoming thread
 func (jh *jhulaHead) handleIncoming(conn *net.TCPConn, portStr string) {
-	Terse.Println("Function handleIncoming : start processing to new connection on port ",portStr)
+	Warning.Println("Function handleIncoming : start processing to new connection on port %s \n",portStr)
 
 	conDet := jh.newJH(conn,portStr)
 
@@ -185,8 +214,8 @@ func (jh *jhulaHead) handleIncoming(conn *net.TCPConn, portStr string) {
 	go conDet.txTcpPkt()
 
 	conDet.conWg.Wait()
-	Verbose.Println("HandleIncoming done waiting ",portStr)
-	conDet.cleanUp()
+	Warning.Println("HandleIncoming done waiting %s \n",portStr)
+	//conDet.cleanUp()
 	close(conDet.Abort)
 
 	jh.ConCount = jh.ConCount -1
@@ -203,42 +232,56 @@ func (jh *jhulaHead) handleIncoming(conn *net.TCPConn, portStr string) {
 //CleanUp function handles graceful closure of Jhula Instance
 func (conn *ConnDet) cleanUp() {
 	//close(conn.ConPktQ.InPacket)
-	close(conn.ConPktQ.QTowApp)
-	close(conn.ConPktQ.OutPacket)
+	Warning.Printf("Cleanup called ")
+	conn.ConnPtr.Close()
+	conn.ConnPtr = nil
 	close(conn.ConPktQ.Buf)
 	close(conn.ConPktQ.OutBuf)
-	conn.ConnPtr.Close()
+	close(conn.ConPktQ.QTowApp)
+	close(conn.ConPktQ.OutPacket)
+	//conn.ConnPtr.Close()
 }
 // recvTcpPkt handles incoming packets.
 func (conn * ConnDet) recvTcpPkt() {
-	 VTerse.Println("Function recvTcpPkt : start monitoring incoming pkt queue for port  ",conn.PortId)
+	 Warning.Println("Function recvTcpPkt : start monitoring incoming pkt queue for port  ",conn.PortId)
 
 	 defer conn.conWg.Done()
 
 	 tmpB := make([]byte,2048)
 
          for {
-		 tmp,ok := <-conn.ConPktQ.Buf
-		 if !ok {
-			 Warning.Println("Function recvTcpPort : ingress channel closed. Cleanup ")
-			 return
-		 }
-
-                 cnt,err := conn.ConnPtr.Read(tmpB)
 		 //fmt.Println(cnt)
 
 		 select {
 		 case <-conn.Abort:
+			Warning.Println("Function recvTcpPkt : function done processing. Abort detected\n")
+			conn.cleanUp()
 			return
 		 default:
+		 tmp,ok := <-conn.ConPktQ.Buf
+		 if !ok {
+			 Warning.Println("Function recvTcpPort : ingress channel closed. Cleanup ")
+			 //conn.Abort <- true
+			 return
+		 }
+                 Warning.Printf("Read: waiting for data \n")
+
+                 cnt,err := conn.ConnPtr.Read(tmpB)
+                 Warning.Printf("Data read : %s cnt :%d err : %d \n",tmpB,cnt,err)
+
                  if err != nil {
-                         if err.Error() == "EOF" {
-                                Warning.Println("Failed to read from socket. Sock closed ",err.Error() )
-				continue
+                         if err == io.EOF {
+                                Warning.Println("EOF Error. Failed to read from socket. Sock closed ",err.Error() )
                         } else {
 				Warning.Println("Error reading from socket : ",err.Error() )
                         }
-                        conn.Abort <- true
+			if conn.ConnPtr != nil {
+                        	conn.Abort <- true
+				continue
+			} else {
+				return
+			}
+
                  } else {
 		 //hack : TODO readonly buffer size bytes in iteration
 		 if cnt > 2048 {
@@ -263,26 +306,35 @@ func (conn * ConnDet) recvTcpPkt() {
 // tcpTxPkt handles tansmits outgoing packet requests on socket
 func (conn *ConnDet) txTcpPkt() {
 	defer conn.conWg.Done()
+	Warning.Println("Function txTcpPkt : start monitoring outgoing queue for port \n")
 
 	for {
 		select {
+		case _,ok := <-conn.Abort:
+			Warning.Println("Function txTcpPkt : Abort detect4ed. Returning %s\n",ok)
+			conn.cleanUp()
+			return
 		case buf,ok := <-conn.ConPktQ.OutBuf:
 			if !ok {
 				Warning.Println("Function txTcpPkt : Out channel is closed. Failed to send")
+				//conn.Abort <- true
+				//continue
 				return
 			}
 			_,err := conn.ConnPtr.Write(buf.Bytes())
 			if err != nil {
-				Error.Println("failure to send packet :",err.Error() )
+				Error.Println("Function failure to send packet :",err.Error() )
 				//Add code to trigger cleanup
-				conn.Abort <- true
+				if conn.ConnPtr != nil {
+					conn.Abort <- true
+				} else {
+					return
+				}
 			} else {
 				buf.Reset()
 				conn.ConPktQ.OutPacket <- buf
 			}
 
-		case <-conn.Abort:
-			return
 		}
 	}
 }
@@ -304,5 +356,23 @@ func (conn *ConnDet) AddToTxQ(outPkt *bytes.Buffer) {
 }
 
 func (conDet *ConnDet) SockClose() {
-	conDet.ConnPtr.Close()
+	//conDet.ConnPtr.Close()
+	//conDet.Abort <- true
+	//close(conDet.ConPktQ.Buf)
+	//close(conDet.ConPktQ.OutBuf)
+	conDet.cleanUp()
+}
+
+func (jh *jhulaHead) PortClose() {
+	for _,con := range jh.ConDet {
+                Warning.Println("Abort len : ",len(con.Abort) )
+		con.cleanUp()
+                //if len(con.Abort) > 0 {       // hack.Abort Already triggered. No action required
+                //        con.Abort <- true
+                //}
+        }
+
+	jh.ClosePort <- true
+	jh.Sock.Close()
+	close(jh.interrupt)
 }
